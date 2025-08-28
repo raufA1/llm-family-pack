@@ -1,0 +1,15 @@
+#!/usr/bin/env bash
+set -euo pipefail
+BASE_LOCAL="http://127.0.0.1:4000"
+cmd_exists() { command -v "$1" >/dev/null 2>/dev/null; }
+if ! cmd_exists smart; then
+  echo "[-] 'smart' CLI not found. Please install your Smart CLI first."
+  exit 1
+fi
+if curl -fsS -m 1 "$BASE_LOCAL/health" >/dev/null 2>&1; then
+  echo "[=] Using LOCAL proxy at $BASE_LOCAL"
+  exec env OPENAI_BASE_URL="$BASE_LOCAL" OPENAI_API_KEY=dev-anything smart "$@"
+else
+  echo "[i] Local proxy not healthy; falling back to CLOUD."
+  exec smart "$@"
+fi

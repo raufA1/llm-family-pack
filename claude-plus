@@ -1,0 +1,20 @@
+#!/usr/bin/env bash
+set -euo pipefail
+CFG_DIR="$HOME/.config/litellm"
+DEFAULT_MODEL_FILE="$CFG_DIR/default_model"
+BASE_LOCAL="http://127.0.0.1:4000"
+# Always keep aliases in sync before launching
+llm auto-claude >/dev/null 2>&1 || true
+DEFAULT_MODEL="$(cat "$DEFAULT_MODEL_FILE" 2>/dev/null || echo "sonnet 4")"
+cmd_exists() { command -v "$1" >/dev/null 2>/dev/null; }
+if ! cmd_exists claude; then
+  echo "[-] 'claude' CLI not found. Please install Claude Code CLI first."
+  exit 1
+fi
+if curl -fsS -m 1 "$BASE_LOCAL/health" >/dev/null 2>&1; then
+  echo "[=] Using LOCAL proxy at $BASE_LOCAL (model=$DEFAULT_MODEL)"
+  exec env ANTHROPIC_API_KEY=dev-anything ANTHROPIC_BASE_URL="$BASE_LOCAL" ANTHROPIC_MODEL="$DEFAULT_MODEL" claude "$@"
+else
+  echo "[i] Local proxy not healthy; falling back to CLOUD."
+  exec claude "$@"
+fi
