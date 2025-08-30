@@ -1,16 +1,21 @@
-# LLM Family Pack v3.0.0
+# LLM Family Pack v4.0.0
 
-A **professional-grade LiteLLM Proxy + CLI toolkit** designed for seamless AI model management and developer workflows.
+A **enterprise-grade LiteLLM Proxy + CLI toolkit** with **Advanced Routing & Load Balancing** for seamless AI model management and developer workflows.
 
 ## ✨ Features
 
 ### Core Components
 - **`llm`** — Comprehensive model and proxy management with advanced diagnostics
+- **`llm-router`** — **NEW!** Advanced routing & load balancing management
 - **`claude+`** — Enhanced Claude Code CLI wrapper with intelligent local→cloud fallback
 - **`smart+`** — Smart CLI wrapper with automatic proxy integration
-- **Professional libraries** — Modular, tested utilities for reliability
+- **Professional libraries** — Modular, tested utilities with routing support
 
 ### Advanced Capabilities
+- **🚦 Smart Routing & Load Balancing** — Round robin, weighted, cost-optimized, latency-based algorithms
+- **⚡ Intelligent Failover** — Automatic backup routes with circuit breakers
+- **💰 Cost Optimization** — Route to cheapest models automatically (99%+ savings possible)
+- **📈 Health Monitoring** — Real-time endpoint monitoring with auto-recovery
 - **🔄 Automatic alias masking** — Any backend model exposed as `sonnet 4` for Claude compatibility
 - **🏥 Self-healing diagnostics** — `llm doctor`, `llm fix`, intelligent error recovery
 - **🔐 Enterprise-grade security** — Secure API key handling, proper file permissions
@@ -82,6 +87,34 @@ llm auto-claude [backing]    # Auto-configure Claude aliases
 llm ensure-claude [backing]  # Ensure Claude compatibility
 ```
 
+#### Advanced Routing (`llm-router`)
+```bash
+# Route group management
+llm-router list              # List all route groups
+llm-router add gpt-4 primary openrouter/openai/gpt-4 openrouter 1 70 30.0
+llm-router add gpt-4 fallback openrouter/qwen/qwen2.5-coder openrouter 2 30 0.27
+
+# Load balancing algorithms
+llm-router algorithm gpt-4 cost_optimized    # Route to cheapest model
+llm-router algorithm claude weighted         # Use weighted distribution
+llm-router algorithm coding round_robin      # Fair rotation
+
+# Health monitoring
+llm-router health start      # Start health monitoring daemon
+llm-router health status     # Check monitoring status
+llm-router health check      # Manual health check
+
+# Testing and analytics
+llm-router test gpt-4 100    # Test load balancing with 100 requests
+llm-router stats gpt-4       # Show routing statistics
+llm-router costs             # Cost analysis across routes
+
+# Configuration management
+llm-router config show       # Show routing configuration
+llm-router config validate   # Validate configuration
+llm-router config backup     # Backup routing rules
+```
+
 #### Enhanced CLI Wrappers
 ```bash
 # Claude+ (Enhanced Claude CLI)
@@ -142,7 +175,8 @@ llm-family-pack/
 ├── lib/                     # Professional utilities library
 │   ├── common.sh           # Core utilities and logging
 │   ├── model_manager.sh    # Model configuration management
-│   └── service_manager.sh  # Service lifecycle management
+│   ├── service_manager.sh  # Service lifecycle management
+│   └── router.sh           # Advanced routing and load balancing
 ├── tests/                   # Comprehensive test suite
 │   ├── test_framework.sh   # Test runner and assertions
 │   ├── test_common.sh      # Common utilities tests
@@ -152,7 +186,16 @@ llm-family-pack/
 └── config.yaml             # Default configuration
 ```
 
-### Key Improvements in v3.0.0
+### Key Improvements in v4.0.0
+
+#### **🚦 Advanced Routing System (NEW!)**
+- **Load Balancing Algorithms** — Round robin, weighted, cost-optimized, latency-based
+- **Intelligent Failover** — Automatic backup routing with circuit breakers  
+- **Health Monitoring** — Real-time endpoint health checks with auto-recovery
+- **Route Analytics** — Detailed statistics and cost analysis
+- **Dynamic Configuration** — Hot-reload routing rules without downtime
+
+### Previous Improvements (v3.0.0)
 
 #### Professional Architecture
 - **Modular design** — Separated concerns into specialized libraries

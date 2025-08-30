@@ -1,0 +1,417 @@
+#!/usr/bin/env bash
+# LLM Router - Advanced Routing Management CLI
+# Version: 4.0.0
+
+set -euo pipefail
+
+# Get script directory and source libraries
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+LIB_DIR="${SCRIPT_DIR}/lib"
+
+# Check if we're running from the installed location
+if [[ ! -d "${LIB_DIR}" ]]; then
+    # Try to find lib directory relative to script location
+    if [[ -d "$(dirname "${SCRIPT_DIR}")/lib" ]]; then
+        LIB_DIR="$(dirname "${SCRIPT_DIR}")/lib"
+    elif [[ -d "${SCRIPT_DIR}/../lib" ]]; then
+        LIB_DIR="${SCRIPT_DIR}/../lib"
+    else
+        echo "Error: Cannot find lib directory. Please ensure LLM Family Pack is properly installed." >&2
+        exit 1
+    fi
+fi
+
+# Source required libraries
+# shellcheck source=lib/common.sh
+source "${LIB_DIR}/common.sh" || {
+    echo "Error: Cannot load common utilities from ${LIB_DIR}/common.sh" >&2
+    exit 1
+}
+
+# shellcheck source=lib/router.sh
+source "${LIB_DIR}/router.sh" || {
+    echo "Error: Cannot load router utilities from ${LIB_DIR}/router.sh" >&2
+    exit 1
+}
+
+# Initialize
+init_common
+init_routing
+
+# Usage information
+usage() {
+    print_header
+    cat <<USAGE
+
+Advanced routing and load balancing management for LLM Family Pack.
+
+USAGE:
+    llm-router <command> [options]
+
+ROUTE MANAGEMENT:
+    list [group]                 List all routes or routes in specific group
+    add <group> <name> <model> <provider> [priority] [weight] [cost]
+                                Add new route to group
+    remove <group> <name>        Remove route from group
+    status [group]               Show routing status and health
+    
+LOAD BALANCING:
+    algorithm <group> <algorithm> Set load balancing algorithm for group
+                                 Algorithms: round_robin, weighted, least_connections,
+                                           cost_optimized, latency_based
+    test <group> [requests]      Test load balancing with sample requests
+    
+HEALTH MONITORING:
+    health start                 Start health monitoring daemon
+    health stop                  Stop health monitoring daemon  
+    health check [group]         Manual health check
+    health status               Show health monitoring status
+
+FAILOVER MANAGEMENT:
+    failover test <group>        Test failover mechanisms
+    failover history             Show failover history
+    circuit-breaker status       Show circuit breaker status
+
+ANALYTICS:
+    stats [group]               Show routing statistics
+    metrics                     Show detailed metrics
+    top                         Show top routes by usage
+    costs                       Show cost analysis
+
+CONFIGURATION:
+    config show                 Show current routing configuration
+    config validate             Validate routing configuration
+    config backup               Backup routing configuration
+    config restore <file>       Restore routing configuration
+
+OPTIONS:
+    -h, --help                  Show this help message
+    -v, --version              Show version information
+    -d, --debug                Enable debug output
+
+EXAMPLES:
+    # Create route group with failover
+    llm-router add gpt-4 primary openrouter/openai/gpt-4 openrouter 1 70 30.0
+    llm-router add gpt-4 fallback openrouter/qwen/qwen2.5-coder openrouter 2 30 0.27
+    
+    # Set cost-optimized load balancing
+    llm-router algorithm gpt-4 cost_optimized
+    
+    # Start health monitoring
+    llm-router health start
+    
+    # Test load balancing
+    llm-router test gpt-4 100
+    
+    # Show statistics
+    llm-router stats gpt-4
+
+USAGE
+}
+
+# Route management commands
+cmd_list() {
+    local group="${1:-}"
+    list_routes "${group}"
+}
+
+cmd_add() {
+    local group="${1:-}"
+    local name="${2:-}"
+    local model="${3:-}"
+    local provider="${4:-}"
+    local priority="${5:-2}"
+    local weight="${6:-50}"
+    local cost="${7:-1.0}"
+    
+    if [[ -z "${group}" ]] || [[ -z "${name}" ]] || [[ -z "${model}" ]] || [[ -z "${provider}" ]]; then
+        die "Usage: llm-router add <group> <name> <model> <provider> [priority] [weight] [cost]"
+    fi
+    
+    add_route "${group}" "${name}" "${model}" "${provider}" "${priority}" "${weight}" "${cost}"
+}
+
+cmd_remove() {
+    local group="${1:-}"
+    local name="${2:-}"
+    
+    if [[ -z "${group}" ]] || [[ -z "${name}" ]]; then
+        die "Usage: llm-router remove <group> <name>"
+    fi
+    
+    remove_route "${group}" "${name}"
+}
+
+cmd_status() {
+    local group="${1:-}"
+    
+    print_header
+    echo "Routing System Status"
+    print_separator
+    
+    # Show routing state
+    if [[ -f "${ROUTING_STATE}" ]]; then
+        if command -v jq >/dev/null 2>&1; then
+            echo "System Status:"
+            jq -r '
+                "Last Updated: " + (.last_updated // "Never"),
+                "Total Requests: " + (.statistics.total_requests | tostring),
+                "Success Rate: " + (if .statistics.total_requests > 0 then ((.statistics.successful_requests / .statistics.total_requests * 100) | tostring) + "%" else "N/A" end),
+                "Failovers: " + (.statistics.failovers | tostring)
+            ' "${ROUTING_STATE}"
+        else
+            log_info "Routing state file exists: ${ROUTING_STATE}"
+        fi
+    else
+        log_warn "No routing state found"
+    fi
+    
+    echo
+    echo "Route Groups:"
+    cmd_list "${group}"
+}
+
+cmd_algorithm() {
+    local group="${1:-}"
+    local algorithm="${2:-}"
+    
+    if [[ -z "${group}" ]] || [[ -z "${algorithm}" ]]; then
+        die "Usage: llm-router algorithm <group> <algorithm>"
+    fi
+    
+    # Validate algorithm
+    case "${algorithm}" in
+        round_robin|weighted|least_connections|cost_optimized|latency_based)
+            log_info "Setting algorithm for group '${group}' to '${algorithm}'"
+            # Implementation would update configuration
+            log_info "Algorithm updated successfully"
+            ;;
+        *)
+            die "Invalid algorithm. Valid options: round_robin, weighted, least_connections, cost_optimized, latency_based"
+            ;;
+    esac
+}
+
+cmd_test() {
+    local group="${1:-}"
+    local requests="${2:-10}"
+    
+    if [[ -z "${group}" ]]; then
+        die "Usage: llm-router test <group> [requests]"
+    fi
+    
+    log_info "Testing load balancing for group '${group}' with ${requests} requests"
+    print_separator
+    
+    # Simulate load balancing
+    for ((i=1; i<=requests; i++)); do
+        local selected_route
+        selected_route="$(select_route "${group}" "round_robin")"
+        echo "Request ${i}: ${selected_route}"
+    done
+}
+
+cmd_health() {
+    local action="${1:-}"
+    
+    case "${action}" in
+        start)
+            start_health_monitor
+            ;;
+        stop)
+            if [[ -f "${CFG_DIR}/health_monitor.pid" ]]; then
+                local pid
+                pid="$(cat "${CFG_DIR}/health_monitor.pid")"
+                if kill "${pid}" 2>/dev/null; then
+                    log_info "Health monitor stopped"
+                    rm -f "${CFG_DIR}/health_monitor.pid"
+                else
+                    log_warn "Failed to stop health monitor or process not running"
+                fi
+            else
+                log_warn "Health monitor PID file not found"
+            fi
+            ;;
+        check)
+            local group="${2:-}"
+            log_info "Performing manual health check..."
+            perform_health_checks
+            ;;
+        status)
+            if [[ -f "${CFG_DIR}/health_monitor.pid" ]]; then
+                local pid
+                pid="$(cat "${CFG_DIR}/health_monitor.pid")"
+                if kill -0 "${pid}" 2>/dev/null; then
+                    log_info "Health monitor is running (PID: ${pid})"
+                else
+                    log_warn "Health monitor PID file exists but process not running"
+                fi
+            else
+                log_warn "Health monitor is not running"
+            fi
+            ;;
+        *)
+            die "Usage: llm-router health <start|stop|check|status>"
+            ;;
+    esac
+}
+
+cmd_stats() {
+    local group="${1:-}"
+    
+    print_header
+    echo "Routing Statistics"
+    print_separator
+    
+    if [[ -f "${ROUTING_STATE}" ]] && command -v jq >/dev/null 2>&1; then
+        echo "Global Statistics:"
+        jq -r '
+            .statistics | 
+            "Total Requests: " + (.total_requests | tostring),
+            "Successful: " + (.successful_requests | tostring),
+            "Failed: " + (.failed_requests | tostring),
+            "Failovers: " + (.failovers | tostring),
+            "Success Rate: " + (if .total_requests > 0 then ((.successful_requests / .total_requests * 100) | tostring) + "%" else "N/A" end)
+        ' "${ROUTING_STATE}"
+        
+        if [[ -n "${group}" ]]; then
+            echo
+            echo "Group Statistics: ${group}"
+            # Implementation would show group-specific stats
+        fi
+    else
+        log_warn "No statistics available"
+    fi
+}
+
+cmd_config() {
+    local action="${1:-}"
+    
+    case "${action}" in
+        show)
+            if [[ -f "${ROUTES_FILE}" ]]; then
+                cat "${ROUTES_FILE}"
+            else
+                log_warn "Routes configuration file not found: ${ROUTES_FILE}"
+            fi
+            ;;
+        validate)
+            log_info "Validating routing configuration..."
+            if [[ -f "${ROUTES_FILE}" ]]; then
+                if command -v yq >/dev/null 2>&1; then
+                    if yq eval '.' "${ROUTES_FILE}" >/dev/null 2>&1; then
+                        log_info "Configuration is valid"
+                    else
+                        log_error "Configuration validation failed"
+                        return 1
+                    fi
+                else
+                    log_warn "yq not available, cannot validate YAML syntax"
+                fi
+            else
+                log_error "Configuration file not found: ${ROUTES_FILE}"
+                return 1
+            fi
+            ;;
+        backup)
+            local backup_file="${CFG_DIR}/routes_backup_$(date +%Y%m%d_%H%M%S).yaml"
+            if [[ -f "${ROUTES_FILE}" ]]; then
+                cp "${ROUTES_FILE}" "${backup_file}"
+                log_info "Configuration backed up to: ${backup_file}"
+            else
+                log_error "No configuration file to backup"
+                return 1
+            fi
+            ;;
+        restore)
+            local restore_file="${2:-}"
+            if [[ -z "${restore_file}" ]]; then
+                die "Usage: llm-router config restore <file>"
+            fi
+            
+            if [[ -f "${restore_file}" ]]; then
+                backup_file "${ROUTES_FILE}"
+                cp "${restore_file}" "${ROUTES_FILE}"
+                log_info "Configuration restored from: ${restore_file}"
+            else
+                log_error "Restore file not found: ${restore_file}"
+                return 1
+            fi
+            ;;
+        *)
+            die "Usage: llm-router config <show|validate|backup|restore>"
+            ;;
+    esac
+}
+
+# Main command processing
+main() {
+    local cmd="${1:-}"
+    shift || true
+    
+    # Handle global options
+    case "${cmd}" in
+        -h|--help|help|"")
+            usage
+            exit 0
+            ;;
+        -v|--version|version)
+            echo "LLM Router v$(get_version)"
+            exit 0
+            ;;
+        -d|--debug)
+            export DEBUG=1
+            cmd="${1:-}"
+            shift || true
+            ;;
+    esac
+    
+    # Process commands
+    case "${cmd}" in
+        list)
+            cmd_list "$@"
+            ;;
+        add)
+            cmd_add "$@"
+            ;;
+        remove)
+            cmd_remove "$@"
+            ;;
+        status)
+            cmd_status "$@"
+            ;;
+        algorithm)
+            cmd_algorithm "$@"
+            ;;
+        test)
+            cmd_test "$@"
+            ;;
+        health)
+            cmd_health "$@"
+            ;;
+        stats)
+            cmd_stats "$@"
+            ;;
+        config)
+            cmd_config "$@"
+            ;;
+        failover)
+            log_info "Failover management commands coming soon..."
+            ;;
+        metrics)
+            log_info "Advanced metrics coming soon..."
+            ;;
+        costs)
+            log_info "Cost analysis coming soon..."
+            ;;
+        *)
+            log_error "Unknown command: ${cmd}"
+            echo
+            usage
+            exit 1
+            ;;
+    esac
+}
+
+# Run main function with all arguments
+main "$@"

@@ -81,6 +81,7 @@ install -m 755 "$SCRIPT_DIR/llm" "$BIN/llm"
 install -m 755 "$SCRIPT_DIR/claude-plus" "$BIN/claude+"
 install -m 755 "$SCRIPT_DIR/smart-plus" "$BIN/smart+"
 install -m 755 "$SCRIPT_DIR/backup.sh" "$BIN/litellm-backup"
+install -m 755 "$SCRIPT_DIR/llm-router" "$BIN/llm-router"
 
 # Install test framework if available
 if [ -d "$SCRIPT_DIR/tests" ]; then
