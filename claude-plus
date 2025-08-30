@@ -1,20 +1,256 @@
 #!/usr/bin/env bash
+# Claude+ - Enhanced Claude Code CLI wrapper with local proxy support
+# Version: 3.0.0
+
 set -euo pipefail
-CFG_DIR="$HOME/.config/litellm"
-DEFAULT_MODEL_FILE="$CFG_DIR/default_model"
-BASE_LOCAL="http://127.0.0.1:4000"
-# Always keep aliases in sync before launching
-llm auto-claude >/dev/null 2>&1 || true
-DEFAULT_MODEL="$(cat "$DEFAULT_MODEL_FILE" 2>/dev/null || echo "sonnet 4")"
-cmd_exists() { command -v "$1" >/dev/null 2>/dev/null; }
-if ! cmd_exists claude; then
-  echo "[-] 'claude' CLI not found. Please install Claude Code CLI first."
-  exit 1
+
+# Get script directory and source libraries
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+LIB_DIR="${SCRIPT_DIR}/lib"
+
+# Check if we're running from the installed location
+if [[ ! -d "${LIB_DIR}" ]]; then
+    # Try to find lib directory relative to script location
+    if [[ -d "$(dirname "${SCRIPT_DIR}")/lib" ]]; then
+        LIB_DIR="$(dirname "${SCRIPT_DIR}")/lib"
+    elif [[ -d "${SCRIPT_DIR}/../lib" ]]; then
+        LIB_DIR="${SCRIPT_DIR}/../lib"
+    else
+        echo "Error: Cannot find lib directory. Please ensure LLM Family Pack is properly installed." >&2
+        exit 1
+    fi
 fi
-if curl -fsS -m 1 "$BASE_LOCAL/health" >/dev/null 2>&1; then
-  echo "[=] Using LOCAL proxy at $BASE_LOCAL (model=$DEFAULT_MODEL)"
-  exec env ANTHROPIC_API_KEY=dev-anything ANTHROPIC_BASE_URL="$BASE_LOCAL" ANTHROPIC_MODEL="$DEFAULT_MODEL" claude "$@"
-else
-  echo "[i] Local proxy not healthy; falling back to CLOUD."
-  exec claude "$@"
-fi
+
+# Source common utilities
+# shellcheck source=lib/common.sh
+source "${LIB_DIR}/common.sh" || {
+    echo "Error: Cannot load common utilities from ${LIB_DIR}/common.sh" >&2
+    exit 1
+}
+
+# Initialize
+init_common
+
+# Configuration
+readonly CLAUDE_CLI="claude"
+readonly FALLBACK_TIMEOUT=3
+
+# Usage information
+usage() {
+    print_header
+    cat <<USAGE
+
+Enhanced Claude Code CLI with local proxy fallback support.
+
+USAGE:
+    claude+ [claude-options...]
+
+DESCRIPTION:
+    Claude+ automatically detects if your local LiteLLM proxy is running and
+    uses it for Claude API calls. If the local proxy is unavailable, it falls
+    back to the official Claude API.
+
+FEATURES:
+    • Automatic local proxy detection
+    • Seamless fallback to cloud API
+    • Claude model alias support (sonnet 4, etc.)
+    • Environment-based configuration
+    • Comprehensive error handling
+
+ENVIRONMENT VARIABLES:
+    ANTHROPIC_API_KEY     Your Claude API key (for cloud fallback)
+    CLAUDE_BACKING_ALIAS  Preferred model alias for local proxy
+    DEBUG                 Enable debug output (set to 1)
+
+CONFIGURATION:
+    Local proxy URL: ${BASE_URL}
+    Config directory: ${CFG_DIR}
+
+EXAMPLES:
+    claude+ "Hello, how are you?"
+    claude+ --model sonnet-4 "Explain quantum computing"
+    DEBUG=1 claude+ "Debug mode enabled"
+
+NOTES:
+    • Requires 'claude' CLI to be installed and configured
+    • Local proxy uses model aliasing for Claude compatibility
+    • All claude CLI options are supported and passed through
+
+USAGE
+}
+
+# Check if Claude CLI is available
+check_claude_cli() {
+    if ! check_command_exists "${CLAUDE_CLI}"; then
+        die "Claude CLI not found. Please install Claude Code CLI first.
+Installation: https://github.com/anthropics/claude-code"
+    fi
+    log_debug "Claude CLI found: $(command -v "${CLAUDE_CLI}")"
+}
+
+# Get default model for local proxy
+get_local_model() {
+    local model=""
+    
+    # Try to get from environment
+    model="$(get_config_value "CLAUDE_BACKING_ALIAS")"
+    
+    # Try default model file
+    if [[ -z "${model}" ]] && [[ -f "${DEFAULT_MODEL_FILE}" ]]; then
+        model="$(cat "${DEFAULT_MODEL_FILE}" 2>/dev/null)" || true
+    fi
+    
+    # Fall back to sonnet 4
+    if [[ -z "${model}" ]]; then
+        model="sonnet 4"
+    fi
+    
+    echo "${model}"
+}
+
+# Setup environment for local proxy
+setup_local_env() {
+    local model
+    model="$(get_local_model)"
+    
+    # Set up environment variables for local proxy
+    export ANTHROPIC_API_KEY="dev-anything"
+    export ANTHROPIC_BASE_URL="${BASE_URL}"
+    export ANTHROPIC_MODEL="${model}"
+    
+    log_debug "Local environment configured:"
+    log_debug "  Base URL: ${BASE_URL}"
+    log_debug "  Model: ${model}"
+}
+
+# Test local proxy connectivity
+test_local_proxy() {
+    local timeout="${1:-${FALLBACK_TIMEOUT}}"
+    
+    log_debug "Testing local proxy connectivity (timeout: ${timeout}s)..."
+    
+    if check_proxy_health "${timeout}"; then
+        log_debug "Local proxy health check: PASSED"
+        return 0
+    else
+        log_debug "Local proxy health check: FAILED"
+        return 1
+    fi
+}
+
+# Sync Claude aliases before using local proxy
+sync_claude_aliases() {
+    log_debug "Syncing Claude aliases..."
+    
+    # Try to run llm auto-claude if available
+    if check_command_exists "llm"; then
+        llm auto-claude >/dev/null 2>&1 || {
+            log_debug "Warning: Failed to sync Claude aliases"
+            return 1
+        }
+        log_debug "Claude aliases synced successfully"
+    else
+        log_debug "Warning: 'llm' command not available for alias sync"
+        return 1
+    fi
+}
+
+# Execute Claude CLI with local proxy
+run_with_local_proxy() {
+    log_info "Using LOCAL proxy at ${BASE_URL} (model: $(get_local_model))"
+    
+    setup_local_env
+    
+    # Execute Claude CLI with local proxy environment
+    exec "${CLAUDE_CLI}" "$@"
+}
+
+# Execute Claude CLI with cloud API
+run_with_cloud_api() {
+    log_info "Using CLOUD API (local proxy unavailable)"
+    
+    # Unset any local proxy environment variables
+    unset ANTHROPIC_BASE_URL ANTHROPIC_MODEL
+    
+    # Execute Claude CLI with original environment
+    exec "${CLAUDE_CLI}" "$@"
+}
+
+# Handle special commands
+handle_special_commands() {
+    case "${1:-}" in
+        -h|--help|help)
+            usage
+            exit 0
+            ;;
+        -v|--version|version)
+            echo "Claude+ v$(get_version)"
+            echo "Wrapper for Claude Code CLI with local proxy support"
+            exit 0
+            ;;
+        --status)
+            print_header
+            echo "Claude+ Status Report"
+            print_separator
+            
+            # Check Claude CLI
+            if check_command_exists "${CLAUDE_CLI}"; then
+                log_info "Claude CLI: Available ($(command -v "${CLAUDE_CLI}"))"
+            else
+                log_error "Claude CLI: Not found"
+            fi
+            
+            # Check local proxy
+            if test_local_proxy; then
+                log_info "Local proxy: Available (${BASE_URL})"
+                log_info "Default model: $(get_local_model)"
+            else
+                log_warn "Local proxy: Unavailable"
+            fi
+            
+            # Check configuration
+            if [[ -f "${ENV_FILE}" ]]; then
+                log_info "Environment file: Present (${ENV_FILE})"
+            else
+                log_warn "Environment file: Missing"
+            fi
+            
+            exit 0
+            ;;
+        --debug)
+            export DEBUG=1
+            shift
+            log_debug "Debug mode enabled"
+            ;;
+    esac
+}
+
+# Main execution logic
+main() {
+    log_debug "Claude+ starting with arguments: $*"
+    
+    # Handle special commands first
+    handle_special_commands "$@"
+    
+    # Check prerequisites
+    check_claude_cli
+    
+    # Try local proxy first
+    if test_local_proxy; then
+        # Attempt to sync aliases
+        sync_claude_aliases || log_debug "Proceeding without alias sync"
+        
+        # Use local proxy
+        run_with_local_proxy "$@"
+    else
+        # Fall back to cloud API
+        log_debug "Local proxy not available, falling back to cloud API"
+        run_with_cloud_api "$@"
+    fi
+}
+
+# Handle interrupts gracefully
+trap 'log_warn "Claude+ interrupted by user"; exit 130' INT TERM
+
+# Run main function
+main "$@"

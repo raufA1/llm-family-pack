@@ -1,15 +1,254 @@
 #!/usr/bin/env bash
+# Smart+ - Enhanced Smart CLI wrapper with local proxy support
+# Version: 3.0.0
+
 set -euo pipefail
-BASE_LOCAL="http://127.0.0.1:4000"
-cmd_exists() { command -v "$1" >/dev/null 2>/dev/null; }
-if ! cmd_exists smart; then
-  echo "[-] 'smart' CLI not found. Please install your Smart CLI first."
-  exit 1
+
+# Get script directory and source libraries
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+LIB_DIR="${SCRIPT_DIR}/lib"
+
+# Check if we're running from the installed location
+if [[ ! -d "${LIB_DIR}" ]]; then
+    # Try to find lib directory relative to script location
+    if [[ -d "$(dirname "${SCRIPT_DIR}")/lib" ]]; then
+        LIB_DIR="$(dirname "${SCRIPT_DIR}")/lib"
+    elif [[ -d "${SCRIPT_DIR}/../lib" ]]; then
+        LIB_DIR="${SCRIPT_DIR}/../lib"
+    else
+        echo "Error: Cannot find lib directory. Please ensure LLM Family Pack is properly installed." >&2
+        exit 1
+    fi
 fi
-if curl -fsS -m 1 "$BASE_LOCAL/health" >/dev/null 2>&1; then
-  echo "[=] Using LOCAL proxy at $BASE_LOCAL"
-  exec env OPENAI_BASE_URL="$BASE_LOCAL" OPENAI_API_KEY=dev-anything smart "$@"
-else
-  echo "[i] Local proxy not healthy; falling back to CLOUD."
-  exec smart "$@"
-fi
+
+# Source common utilities
+# shellcheck source=lib/common.sh
+source "${LIB_DIR}/common.sh" || {
+    echo "Error: Cannot load common utilities from ${LIB_DIR}/common.sh" >&2
+    exit 1
+}
+
+# Initialize
+init_common
+
+# Configuration
+readonly SMART_CLI="smart"
+readonly FALLBACK_TIMEOUT=3
+
+# Usage information
+usage() {
+    print_header
+    cat <<USAGE
+
+Enhanced Smart CLI with local proxy fallback support.
+
+USAGE:
+    smart+ [smart-options...]
+
+DESCRIPTION:
+    Smart+ automatically detects if your local LiteLLM proxy is running and
+    uses it for Smart CLI API calls. If the local proxy is unavailable, it 
+    falls back to the original Smart CLI configuration.
+
+FEATURES:
+    • Automatic local proxy detection
+    • Seamless fallback to original Smart CLI
+    • OpenAI-compatible API integration
+    • Environment-based configuration
+    • Comprehensive error handling
+
+ENVIRONMENT VARIABLES:
+    OPENAI_API_KEY        Your OpenAI API key (for cloud fallback)
+    OPENAI_BASE_URL       OpenAI API base URL (for cloud fallback)
+    SMART_BACKING_ALIAS   Preferred model alias for local proxy
+    DEBUG                 Enable debug output (set to 1)
+
+CONFIGURATION:
+    Local proxy URL: ${BASE_URL}
+    Config directory: ${CFG_DIR}
+
+EXAMPLES:
+    smart+ "Write a Python function to sort a list"
+    smart+ --model gpt-4 "Explain machine learning"
+    DEBUG=1 smart+ "Debug mode enabled"
+
+NOTES:
+    • Requires 'smart' CLI to be installed and configured
+    • Local proxy uses OpenAI-compatible API endpoints
+    • All Smart CLI options are supported and passed through
+
+USAGE
+}
+
+# Check if Smart CLI is available
+check_smart_cli() {
+    if ! check_command_exists "${SMART_CLI}"; then
+        die "Smart CLI not found. Please install your Smart CLI first.
+For more information, check your Smart CLI documentation."
+    fi
+    log_debug "Smart CLI found: $(command -v "${SMART_CLI}")"
+}
+
+# Get default model for local proxy
+get_local_model() {
+    local model=""
+    
+    # Try to get from environment
+    model="$(get_config_value "SMART_BACKING_ALIAS")"
+    
+    # Try default model file
+    if [[ -z "${model}" ]] && [[ -f "${DEFAULT_MODEL_FILE}" ]]; then
+        model="$(cat "${DEFAULT_MODEL_FILE}" 2>/dev/null)" || true
+    fi
+    
+    # Fall back to first available model
+    if [[ -z "${model}" ]]; then
+        # Try to get first model from config
+        if [[ -f "${LIB_DIR}/model_manager.sh" ]]; then
+            # shellcheck source=lib/model_manager.sh
+            source "${LIB_DIR}/model_manager.sh"
+            model="$(get_aliases_from_config | head -n1)" || model=""
+        fi
+    fi
+    
+    # Final fallback
+    if [[ -z "${model}" ]]; then
+        model="gpt-3.5-turbo"
+    fi
+    
+    echo "${model}"
+}
+
+# Setup environment for local proxy
+setup_local_env() {
+    local model
+    model="$(get_local_model)"
+    
+    # Set up environment variables for local proxy (OpenAI-compatible)
+    export OPENAI_BASE_URL="${BASE_URL}"
+    export OPENAI_API_KEY="dev-anything"
+    export OPENAI_MODEL="${model}"
+    
+    log_debug "Local environment configured:"
+    log_debug "  Base URL: ${BASE_URL}"
+    log_debug "  Model: ${model}"
+}
+
+# Test local proxy connectivity
+test_local_proxy() {
+    local timeout="${1:-${FALLBACK_TIMEOUT}}"
+    
+    log_debug "Testing local proxy connectivity (timeout: ${timeout}s)..."
+    
+    if check_proxy_health "${timeout}"; then
+        log_debug "Local proxy health check: PASSED"
+        return 0
+    else
+        log_debug "Local proxy health check: FAILED"
+        return 1
+    fi
+}
+
+# Execute Smart CLI with local proxy
+run_with_local_proxy() {
+    log_info "Using LOCAL proxy at ${BASE_URL} (model: $(get_local_model))"
+    
+    setup_local_env
+    
+    # Execute Smart CLI with local proxy environment
+    exec "${SMART_CLI}" "$@"
+}
+
+# Execute Smart CLI with original configuration
+run_with_original_config() {
+    log_info "Using original Smart CLI configuration (local proxy unavailable)"
+    
+    # Unset any local proxy environment variables to avoid conflicts
+    unset OPENAI_BASE_URL OPENAI_MODEL
+    
+    # Execute Smart CLI with original environment
+    exec "${SMART_CLI}" "$@"
+}
+
+# Handle special commands
+handle_special_commands() {
+    case "${1:-}" in
+        -h|--help|help)
+            usage
+            exit 0
+            ;;
+        -v|--version|version)
+            echo "Smart+ v$(get_version)"
+            echo "Wrapper for Smart CLI with local proxy support"
+            exit 0
+            ;;
+        --status)
+            print_header
+            echo "Smart+ Status Report"
+            print_separator
+            
+            # Check Smart CLI
+            if check_command_exists "${SMART_CLI}"; then
+                log_info "Smart CLI: Available ($(command -v "${SMART_CLI}"))"
+            else
+                log_error "Smart CLI: Not found"
+            fi
+            
+            # Check local proxy
+            if test_local_proxy; then
+                log_info "Local proxy: Available (${BASE_URL})"
+                log_info "Default model: $(get_local_model)"
+            else
+                log_warn "Local proxy: Unavailable"
+            fi
+            
+            # Check configuration
+            if [[ -f "${ENV_FILE}" ]]; then
+                log_info "Environment file: Present (${ENV_FILE})"
+            else
+                log_warn "Environment file: Missing"
+            fi
+            
+            # Check for OpenAI configuration in original environment
+            if [[ -n "${OPENAI_API_KEY:-}" ]]; then
+                log_info "OpenAI API key: Configured"
+            else
+                log_warn "OpenAI API key: Not found in environment"
+            fi
+            
+            exit 0
+            ;;
+        --debug)
+            export DEBUG=1
+            shift
+            log_debug "Debug mode enabled"
+            ;;
+    esac
+}
+
+# Main execution logic
+main() {
+    log_debug "Smart+ starting with arguments: $*"
+    
+    # Handle special commands first
+    handle_special_commands "$@"
+    
+    # Check prerequisites
+    check_smart_cli
+    
+    # Try local proxy first
+    if test_local_proxy; then
+        # Use local proxy
+        run_with_local_proxy "$@"
+    else
+        # Fall back to original Smart CLI configuration
+        log_debug "Local proxy not available, using original Smart CLI configuration"
+        run_with_original_config "$@"
+    fi
+}
+
+# Handle interrupts gracefully
+trap 'log_warn "Smart+ interrupted by user"; exit 130' INT TERM
+
+# Run main function
+main "$@"

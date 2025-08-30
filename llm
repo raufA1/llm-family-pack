@@ -1,266 +1,396 @@
 #!/usr/bin/env bash
+# LLM Family Pack - Main CLI Tool
+# Version: 3.0.0
+
 set -euo pipefail
 
-CFG_DIR="$HOME/.config/litellm"
-CFG="$CFG_DIR/config.yaml"
-ENVF="$CFG_DIR/env"
-UNIT="litellm.service"
-DEFAULT_FILE="$CFG_DIR/default_model"
-PORT=4000
-BASE="http://127.0.0.1:${PORT}"
+# Get script directory and source libraries
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+LIB_DIR="${SCRIPT_DIR}/lib"
 
+# Check if we're running from the installed location
+if [[ ! -d "${LIB_DIR}" ]]; then
+    # Try to find lib directory relative to script location
+    if [[ -d "$(dirname "${SCRIPT_DIR}")/lib" ]]; then
+        LIB_DIR="$(dirname "${SCRIPT_DIR}")/lib"
+    elif [[ -d "${SCRIPT_DIR}/../lib" ]]; then
+        LIB_DIR="${SCRIPT_DIR}/../lib"
+    else
+        echo "Error: Cannot find lib directory. Please ensure LLM Family Pack is properly installed." >&2
+        exit 1
+    fi
+fi
+
+# Source required libraries
+# shellcheck source=lib/common.sh
+source "${LIB_DIR}/common.sh" || {
+    echo "Error: Cannot load common utilities from ${LIB_DIR}/common.sh" >&2
+    exit 1
+}
+
+# shellcheck source=lib/model_manager.sh
+source "${LIB_DIR}/model_manager.sh" || {
+    echo "Error: Cannot load model manager from ${LIB_DIR}/model_manager.sh" >&2
+    exit 1
+}
+
+# shellcheck source=lib/service_manager.sh
+source "${LIB_DIR}/service_manager.sh" || {
+    echo "Error: Cannot load service manager from ${LIB_DIR}/service_manager.sh" >&2
+    exit 1
+}
+
+# Initialize
+init_common
+
+# Usage information
 usage() {
-cat <<USAGE
-llm — manage LiteLLM proxy and models
+    print_header
+    cat <<USAGE
 
-Usage:
-  llm start|stop|restart|status|logs
-  llm add [ALIAS MODEL_ID [API_BASE] [MAX_TOKENS]]
-  llm list
-  llm change
-  llm delete
-  llm tidy
-  llm show-config
-  llm doctor
-  llm fix
-  llm cache clear
-  llm test [ALIAS] ["ping"]
-  llm ensure-claude [BACKING_ALIAS_OR_MODEL]
-  llm auto-claude [BACKING_ALIAS_OR_MODEL]
+A comprehensive CLI for managing LiteLLM proxy and AI models.
+
+USAGE:
+    llm <command> [options]
+
+SERVICE COMMANDS:
+    start                    Start the LiteLLM proxy service
+    stop                     Stop the LiteLLM proxy service  
+    restart                  Restart the LiteLLM proxy service
+    status                   Show detailed service status
+    logs [lines]             Show service logs (default: 50 lines)
+
+MODEL COMMANDS:
+    add [alias] [model] [api_base] [max_tokens]
+                            Add or update a model configuration
+    list                     List all configured models
+    change                   Interactively change default model
+    delete                   Interactively delete a model
+    test [alias] [endpoint]  Test model connectivity
+
+CLAUDE INTEGRATION:
+    ensure-claude [backing]  Ensure Claude aliases point to backing model
+    auto-claude [backing]    Auto-configure Claude aliases from environment
+
+MAINTENANCE COMMANDS:
+    doctor                   Run comprehensive diagnostics
+    fix                      Fix common configuration issues
+    tidy                     Clean up configuration file formatting
+    show-config             Display current configuration
+    cache clear             Clear uv package cache
+
+OPTIONS:
+    -h, --help              Show this help message
+    -v, --version           Show version information
+    -d, --debug             Enable debug output
+
+EXAMPLES:
+    llm start && llm doctor
+    llm add "gpt-4" "gpt-4" "https://api.openai.com/v1" 8192
+    llm list
+    llm change
+    llm auto-claude "qwen coder"
+
+For more information, visit: https://github.com/your-username/llm-family-pack
+
 USAGE
 }
 
-ensure_cfg() {
-  mkdir -p "$CFG_DIR"
-  [ -f "$CFG" ] || cat > "$CFG" <<'YML'
-model_list:
-  - model_name: "sonnet 4"
-    litellm_params:
-      model: openrouter/qwen/qwen3-coder
-      api_base: https://openrouter.ai/api/v1
-      max_tokens: 8192
-
-litellm_settings: {}
-
-general_settings:
-  disable_database: true
-YML
+# Enhanced error handling for commands
+handle_command_error() {
+    local exit_code="$1"
+    local command="$2"
+    
+    case "${exit_code}" in
+        0) return 0 ;;
+        1) log_error "Command '${command}' failed" ;;
+        2) log_error "Invalid arguments for command '${command}'" ;;
+        130) log_warn "Command '${command}' interrupted by user" ;;
+        *) log_error "Command '${command}' failed with exit code ${exit_code}" ;;
+    esac
+    
+    return "${exit_code}"
 }
 
-normalize_alias() {
-  local a="$1"
-  a="${a//_/ - }"; a="${a//\//-}"; a="$(echo "$a" | tr 'A-Z' 'a-z')"
-  if [[ "$a" =~ sonnet[[:space:]-]?4 ]]; then echo "sonnet 4"; return; fi
-  if [[ "$a" =~ sonnet[[:space:]-]?3\.?5 ]]; then echo "sonnet 3.5"; return; fi
-  if [[ "$a" =~ haiku[[:space:]-]?3\.?5 ]]; then echo "haiku 3.5"; return; fi
-  if [[ "$a" =~ opus ]]; then echo "opus"; return; fi
-  echo "${a//-/ }"
-}
-
-lookup_alias_block() {
-  local alias="$1"
-  awk -v a="$alias" '
-    $0 ~ "^- model_name: \"" a "\""{found=1}
-    END{ if(found) exit 0; else exit 1 }
-  ' "$CFG"
-}
-
-append_or_replace_alias() {
-  local alias="$1" model_id="$2" api_base="$3" max_tokens="$4"
-  if [[ "$api_base" == *"openrouter.ai"* ]] && [[ "$model_id" != openrouter/* ]]; then
-    model_id="openrouter/$model_id"
-  fi
-  if lookup_alias_block "$alias"; then
-    tmp="$(mktemp)"
-    awk -v a="$alias" -v mid="$model_id" -v api="$api_base" -v mt="$max_tokens" '
-      BEGIN{skip=0}
-      {
-        if ($0 ~ "^- model_name: \"" a "\"") {
-          print $0; getline; print "    litellm_params:";
-          print "      model: " mid;
-          print "      api_base: " api;
-          print "      max_tokens: " mt;
-          skip=1; next
-        }
-        if (skip && $0 ~ "^- model_name: ") { skip=0 }
-        if (!skip) print
-      }
-    ' "$CFG" > "$tmp"
-    mv "$tmp" "$CFG"
-  else
-    tmp="$(mktemp)"
-    awk '1' "$CFG" > "$tmp"
-    {
-      printf '  - model_name: "%s"\n' "$alias"
-      printf '    litellm_params:\n'
-      printf '      model: %s\n' "$model_id"
-      printf '      api_base: %s\n' "$api_base"
-      printf '      max_tokens: %s\n' "$max_tokens"
-    } >> "$tmp"
-    mv "$tmp" "$CFG"
-  fi
-}
-
-get_aliases_from_cfg() {
-  awk '/- model_name:/ {alias=$0; sub(/^[[:space:]]*- model_name:[[:space:]]*"/,"",alias); sub(/"$/,"",alias); print alias}' "$CFG" 2>/dev/null
-}
-
-list_models() {
-  awk '
-    /- model_name:/ {
-      alias=$0; sub(/^[[:space:]]*- model_name:[[:space:]]*"/,"",alias); sub(/"$/,"",alias);
-      state=1; next
-    }
-    state && /model:/ { model=$2 }
-    state && /api_base:/ { api=$2 }
-    state && /max_tokens:/ { mt=$2; printf "\"%s\" -> %s (api_base=%s, max_tokens=%s)\n", alias, model, api, mt; state=0 }
-  ' "$CFG" 2>/dev/null
-}
-
-default_alias() {
-  if [ -f "$DEFAULT_FILE" ]; then cat "$DEFAULT_FILE"; else get_aliases_from_cfg | head -n1; fi
-}
-
-resolve_backing_to_tuple() {
-  local backing="$1"
-  if [[ "$backing" == */* ]] || [[ "$backing" == openrouter/* ]]; then
-    echo "$backing|https://openrouter.ai/api/v1|8192"; return
-  fi
-  local model_id api_base max_tokens
-  model_id="$(awk -v a="$backing" '
-    $0 ~ "^- model_name: \"" a "\""{state=1; next}
-    state && /model:/ {print $2; exit}
-  ' "$CFG")"
-  api_base="$(awk -v a="$backing" '
-    $0 ~ "^- model_name: \"" a "\""{state=1; next}
-    state && /api_base:/ {print $2; exit}
-  ' "$CFG")"
-  max_tokens="$(awk -v a="$backing" '
-    $0 ~ "^- model_name: \"" a "\""{state=1; next}
-    state && /max_tokens:/ {print $2; exit}
-  ' "$CFG")"
-  if [ -z "${model_id:-}" ]; then
-    echo "openrouter/qwen/qwen3-coder|https://openrouter.ai/api/v1|8192"; return
-  fi
-  echo "${model_id}|${api_base:-https://openrouter.ai/api/v1}|${max_tokens:-8192}"
-}
-
-ensure_double_alias() {
-  local model_id="$1" api_base="$2" mt="$3"
-  append_or_replace_alias "sonnet 4" "$model_id" "$api_base" "$mt"
-  append_or_replace_alias "claude-sonnet-4-20250514" "$model_id" "$api_base" "$mt"
-}
-
-ensure_cfg
-
-cmd="${1:-}"; shift || true
-
-case "${cmd}" in
-  start) systemctl --user enable "$UNIT" --now ;;
-  stop) systemctl --user stop "$UNIT" ;;
-  restart) systemctl --user restart "$UNIT" ;;
-  status) systemctl --user status "$UNIT" --no-pager ;;
-  logs) journalctl --user -u "$UNIT" -n 200 -l --no-pager ;;
-  add)
-    alias="${1:-}"; model_id="${2:-}"; api_base="${3:-https://openrouter.ai/api/v1}"; mt="${4:-4096}"
-    if [ -z "$alias" ] || [ -z "$model_id" ]; then
-      echo "Provider? 1) OpenRouter  2) OpenAI  3) Together  4) Fireworks  5) Custom"
-      read -r -p "[1-5]: " p
-      case "$p" in
-        2) api="https://api.openai.com/v1"; keyname="OPENAI_API_KEY";;
-        3) api="https://api.together.xyz/v1"; keyname="TOGETHERAI_API_KEY";;
-        4) api="https://api.fireworks.ai/inference/v1"; keyname="FIREWORKS_API_KEY";;
-        5) read -r -p "Custom api_base: " api; keyname="OPENAI_API_KEY";;
-        *) api="https://openrouter.ai/api/v1"; keyname="OPENROUTER_API_KEY";;
-      esac
-      read -r -p "Alias name (any form; \"sonnet 4\" friendly supported): " alias
-      read -r -p "Provider model id (e.g., qwen/qwen3-coder): " model_id
-      read -r -p "max_tokens [4096]: " mt; mt="${mt:-4096}"
-      api_base="$api"
-      if ! grep -q "^${keyname}=" "$ENVF" 2>/dev/null; then
-        read -r -s -p "${keyname} not set; paste key: " k; echo
-        echo "${keyname}=${k}" >> "$ENVF"; chmod 600 "$ENVF"
-        echo "[+] Saved ${keyname} to $ENVF"
-      fi
+# Enhanced model addition with provider detection
+add_model_interactive() {
+    local alias="${1:-}"
+    local model_id="${2:-}" 
+    local api_base="${3:-}"
+    local max_tokens="${4:-4096}"
+    
+    if [[ -z "${alias}" ]] || [[ -z "${model_id}" ]]; then
+        echo "Model Addition Wizard"
+        print_separator
+        
+        echo "Available Providers:"
+        echo "  1) OpenRouter (default)"
+        echo "  2) OpenAI"
+        echo "  3) Together AI"
+        echo "  4) Fireworks AI" 
+        echo "  5) Custom Provider"
+        
+        local provider
+        read -r -p "Select provider [1-5]: " provider
+        
+        local keyname="OPENROUTER_API_KEY"
+        case "${provider}" in
+            2) 
+                api_base="https://api.openai.com/v1"
+                keyname="OPENAI_API_KEY"
+                ;;
+            3) 
+                api_base="https://api.together.xyz/v1"
+                keyname="TOGETHERAI_API_KEY"
+                ;;
+            4) 
+                api_base="https://api.fireworks.ai/inference/v1"
+                keyname="FIREWORKS_API_KEY"
+                ;;
+            5) 
+                read -r -p "Enter custom API base URL: " api_base
+                validate_url "${api_base}"
+                keyname="OPENAI_API_KEY"
+                ;;
+            *) 
+                api_base="https://openrouter.ai/api/v1"
+                keyname="OPENROUTER_API_KEY"
+                ;;
+        esac
+        
+        read -r -p "Enter alias name (e.g., 'gpt-4', 'sonnet 4'): " alias
+        validate_not_empty "alias" "${alias}"
+        
+        read -r -p "Enter model ID (e.g., 'gpt-4', 'qwen/qwen3-coder'): " model_id
+        validate_not_empty "model_id" "${model_id}"
+        
+        read -r -p "Enter max tokens [${max_tokens}]: " input_tokens
+        max_tokens="${input_tokens:-${max_tokens}}"
+        
+        # Check for API key
+        if ! get_config_value "${keyname}" >/dev/null || [[ -z "$(get_config_value "${keyname}")" ]]; then
+            echo
+            log_warn "API key ${keyname} is not configured"
+            read -r -s -p "Enter your API key: " api_key
+            echo
+            
+            if [[ -n "${api_key}" ]]; then
+                set_config_value "${keyname}" "${api_key}"
+                log_info "API key saved securely"
+            else
+                log_warn "No API key provided - you may need to configure it later"
+            fi
+        fi
     fi
-    alias_norm="$(normalize_alias "$alias")"
-    append_or_replace_alias "$alias_norm" "$model_id" "$api_base" "$mt"
-    echo "[+] Mapping: \"$alias_norm\" -> $model_id (api_base=$api_base, max_tokens=$mt)"
-    ;;
-  list) list_models ;;
-  change)
-    echo "Select default model alias:"
-    mapfile -t arr < <(get_aliases_from_cfg)
-    i=0; for a in "${arr[@]}"; do i=$((i+1)); echo "  $i) $a"; done
-    read -r -p "[1-${#arr[@]}]: " idx
-    alias="${arr[$((idx-1))]:-}"
-    if [ -n "${alias:-}" ]; then echo "$alias" > "$DEFAULT_FILE"; echo "[+] Default set to: $alias"; else echo "[-] Invalid selection"; fi
-    ;;
-  delete)
-    echo "Select alias to delete:"
-    mapfile -t arr < <(get_aliases_from_cfg)
-    i=0; for a in "${arr[@]}"; do i=$((i+1)); echo "  $i) $a"; done
-    read -r -p "[1-${#arr[@]}]: " idx
-    alias="${arr[$((idx-1))]:-}"
-    if [ -n "${alias:-}" ]; then
-      tmp="$(mktemp)"
-      awk -v a="$alias" '
-        BEGIN{skip=0}
-        {
-          if ($0 ~ "^- model_name: \"" a "\"") { skip=1; next }
-          if (skip && $0 ~ "^- model_name: ") { skip=0 }
-          if (!skip) print
-        }
-      ' "$CFG" > "$tmp"
-      mv "$tmp" "$CFG"
-      if [ -f "$DEFAULT_FILE" ] && grep -qx "$alias" "$DEFAULT_FILE"; then rm -f "$DEFAULT_FILE"; fi
-      echo "[+] Deleted alias: $alias"
+    
+    # Normalize alias
+    local normalized_alias
+    normalized_alias="$(normalize_alias "${alias}")"
+    
+    # Add the model
+    append_or_replace_alias "${normalized_alias}" "${model_id}" "${api_base}" "${max_tokens}"
+}
+
+# Interactive model selection
+select_model_interactive() {
+    local action="$1"
+    
+    echo "Available models:"
+    local -a models
+    mapfile -t models < <(get_aliases_from_config)
+    
+    if [[ ${#models[@]} -eq 0 ]]; then
+        die "No models configured. Use 'llm add' to add a model first."
+    fi
+    
+    local i=0
+    for model in "${models[@]}"; do
+        i=$((i + 1))
+        echo "  ${i}) ${model}"
+    done
+    
+    local selection
+    read -r -p "Select model [1-${#models[@]}]: " selection
+    
+    if [[ "${selection}" =~ ^[0-9]+$ ]] && [[ "${selection}" -ge 1 ]] && [[ "${selection}" -le ${#models[@]} ]]; then
+        echo "${models[$((selection - 1))]}"
     else
-      echo "[-] Invalid selection"
+        die "Invalid selection"
     fi
-    ;;
-  tidy)
-    tmp="$(mktemp)"; sed -E 's/[ \t]+$//' "$CFG" | awk 'NF{print} !NF&&prev==0{print} {prev=NF?1:0}' > "$tmp"; mv "$tmp" "$CFG"
-    echo "[=] Tidy complete."
-    ;;
-  show-config) cat "$CFG" ;;
-  doctor)
-    echo "== Doctor =="
-    systemctl --user status "$UNIT" --no-pager || true
-    echo
-    if curl -fsS "$BASE/health" >/dev/null 2>&1; then echo "[+] /health OK"; else echo "[-] /health FAILED"; fi
-    if curl -fsS "$BASE/health/readiness" >/dev/null 2>&1; then echo "[+] /health/readiness OK"; else echo "[-] /health/readiness FAILED"; fi
-    echo
-    if command -v ss >/dev/null 2>&1; then ss -ltnp | grep ":${PORT}" || echo "[-] Not listening on :${PORT}"; fi
-    echo
-    if [ -f "$ENVF" ]; then grep -E '^(OPENROUTER_API_KEY|OPENAI_API_KEY|LITELLM_DISABLE_DB|CLAUDE_BACKING_ALIAS)=' "$ENVF" || echo "[i] No keys set yet."; else echo "[-] Env file missing at $ENVF"; fi
-    ;;
-  fix) [ -f "$ENVF" ] && chmod 600 "$ENVF" || true; systemctl --user daemon-reload || true ;;
-  cache)
-    sub="${1:-}"; shift || true
-    if [ "$sub" = "clear" ]; then rm -rf "$HOME/.cache/uv" || true; echo "[=] Cleared uv cache (~/.cache/uv)"; else usage; fi
-    ;;
-  ensure-claude)
-    backing="${1:-qwen coder}"
-    IFS='|' read -r mid api mt <<<"$(resolve_backing_to_tuple "$backing")"
-    ensure_double_alias "$mid" "$api" "$mt"
-    echo "[+] Ensured aliases (\"sonnet 4\" & \"claude-sonnet-4-20250514\") -> $mid"
-    ;;
-  auto-claude)
-    backing="${1:-}"
-    if [ -z "$backing" ] && [ -f "$ENVF" ]; then
-      b="$(grep -E '^CLAUDE_BACKING_ALIAS=' "$ENVF" | tail -n1 | cut -d= -f2-)"
-      [ -n "${b:-}" ] && backing="$b" || true
+}
+
+# Test model connectivity 
+test_model() {
+    local alias="${1:-}"
+    local endpoint="${2:-/health}"
+    
+    if [[ -z "${alias}" ]]; then
+        alias="$(get_default_alias)"
     fi
-    [ -n "${backing:-}" ] || backing="$(default_alias)"
-    [ -n "${backing:-}" ] || backing="qwen coder"
-    IFS='|' read -r mid api mt <<<"$(resolve_backing_to_tuple "$backing")"
-    ensure_double_alias "$mid" "$api" "$mt"
-    echo "[+] Auto-masked: aliases -> $mid"
-    ;;
-  test)
-    echo "[*] Testing health at $BASE ..."
-    if curl -fsS "$BASE/health" >/dev/null 2>&1; then echo "[+] Local proxy healthy."; else echo "[-] Local proxy not healthy."; fi
-    ;;
-  *) usage ;;
-esac
+    
+    log_info "Testing connectivity..."
+    print_separator
+    
+    # Test proxy health
+    if check_proxy_health 5; then
+        log_info "Proxy health check: PASSED"
+    else
+        log_error "Proxy health check: FAILED"
+        return 1
+    fi
+    
+    # Test specific endpoint if provided
+    if [[ "${endpoint}" != "/health" ]]; then
+        if check_proxy_health 5 "${endpoint}"; then
+            log_info "Endpoint ${endpoint}: PASSED"
+        else
+            log_error "Endpoint ${endpoint}: FAILED"
+            return 1
+        fi
+    fi
+    
+    # Test model listing
+    if command -v curl >/dev/null 2>&1; then
+        local models_response
+        models_response="$(curl -s -m 10 "${BASE_URL}/v1/models" 2>/dev/null)" || {
+            log_error "Model listing: FAILED"
+            return 1
+        }
+        
+        if [[ -n "${models_response}" ]]; then
+            log_info "Model listing: PASSED"
+        else
+            log_warn "Model listing: Empty response"
+        fi
+    fi
+    
+    log_info "All tests completed successfully"
+}
+
+# Main command processing
+main() {
+    local cmd="${1:-}"
+    shift || true
+    
+    # Handle global options
+    case "${cmd}" in
+        -h|--help|help|"")
+            usage
+            exit 0
+            ;;
+        -v|--version|version)
+            echo "LLM Family Pack v$(get_version)"
+            exit 0
+            ;;
+        -d|--debug)
+            export DEBUG=1
+            cmd="${1:-}"
+            shift || true
+            ;;
+    esac
+    
+    # Process commands
+    case "${cmd}" in
+        start)
+            start_service || handle_command_error $? "${cmd}"
+            ;;
+        stop)
+            stop_service || handle_command_error $? "${cmd}"
+            ;;
+        restart)
+            restart_service || handle_command_error $? "${cmd}"
+            ;;
+        status)
+            show_service_status || handle_command_error $? "${cmd}"
+            ;;
+        logs)
+            local lines="${1:-50}"
+            show_service_logs "${lines}" || handle_command_error $? "${cmd}"
+            ;;
+        add)
+            add_model_interactive "$@" || handle_command_error $? "${cmd}"
+            ;;
+        list)
+            list_models || handle_command_error $? "${cmd}"
+            ;;
+        change)
+            echo "Select new default model:"
+            local selected_model
+            selected_model="$(select_model_interactive "change")"
+            set_default_alias "${selected_model}" || handle_command_error $? "${cmd}"
+            ;;
+        delete)
+            echo "Select model to delete:"
+            local selected_model
+            selected_model="$(select_model_interactive "delete")"
+            delete_alias "${selected_model}" || handle_command_error $? "${cmd}"
+            ;;
+        test)
+            test_model "$@" || handle_command_error $? "${cmd}"
+            ;;
+        tidy)
+            tidy_config || handle_command_error $? "${cmd}"
+            ;;
+        show-config)
+            if [[ -f "${CFG_FILE}" ]]; then
+                cat "${CFG_FILE}"
+            else
+                die "Configuration file not found: ${CFG_FILE}"
+            fi
+            ;;
+        doctor)
+            run_diagnostics || handle_command_error $? "${cmd}"
+            ;;
+        fix)
+            fix_common_issues || handle_command_error $? "${cmd}"
+            ;;
+        cache)
+            local sub_cmd="${1:-}"
+            if [[ "${sub_cmd}" == "clear" ]]; then
+                rm -rf "${HOME}/.cache/uv" 2>/dev/null || true
+                log_info "Cleared uv cache"
+            else
+                die "Usage: llm cache clear"
+            fi
+            ;;
+        ensure-claude)
+            local backing="${1:-qwen coder}"
+            local model_tuple
+            model_tuple="$(resolve_backing_to_tuple "${backing}")"
+            IFS='|' read -r model_id api_base max_tokens <<< "${model_tuple}"
+            ensure_claude_aliases "${model_id}" "${api_base}" "${max_tokens}"
+            ;;
+        auto-claude)
+            local backing="${1:-}"
+            
+            # Try to get backing from environment
+            if [[ -z "${backing}" ]] && [[ -f "${ENV_FILE}" ]]; then
+                backing="$(get_config_value "CLAUDE_BACKING_ALIAS")"
+            fi
+            
+            # Fall back to default
+            if [[ -z "${backing}" ]]; then
+                backing="$(get_default_alias)"
+            fi
+            
+            if [[ -z "${backing}" ]]; then
+                backing="qwen coder"
+            fi
+            
+            local model_tuple
+            model_tuple="$(resolve_backing_to_tuple "${backing}")"
+            IFS='|' read -r model_id api_base max_tokens <<< "${model_tuple}"
+            ensure_claude_aliases "${model_id}" "${api_base}" "${max_tokens}"
+            log_info "Auto-configured Claude aliases using: ${backing}"
+            ;;
+        *)
+            log_error "Unknown command: ${cmd}"
+            echo
+            usage
+            exit 1
+            ;;
+    esac
+}
+
+# Run main function with all arguments
+main "$@"
