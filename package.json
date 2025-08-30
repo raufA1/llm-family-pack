@@ -1,0 +1,62 @@
+{
+  "name": "@llm-family/pack",
+  "version": "4.0.0",
+  "description": "Enterprise-grade LiteLLM Proxy with Advanced Routing & Load Balancing",
+  "keywords": [
+    "llm",
+    "litellm",
+    "ai",
+    "proxy",
+    "routing",
+    "load-balancing",
+    "claude",
+    "gpt",
+    "openrouter",
+    "anthropic",
+    "openai"
+  ],
+  "homepage": "https://github.com/raufA1/llm-family-pack",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/raufA1/llm-family-pack.git"
+  },
+  "bugs": {
+    "url": "https://github.com/raufA1/llm-family-pack/issues"
+  },
+  "license": "MIT",
+  "author": "LLM Family Pack Team",
+  "bin": {
+    "llm": "./bin/llm",
+    "llm-router": "./bin/llm-router",
+    "claude+": "./bin/claude-plus",
+    "smart+": "./bin/smart-plus",
+    "litellm-backup": "./bin/backup.sh"
+  },
+  "files": [
+    "bin/",
+    "lib/",
+    "tests/",
+    "config.yaml",
+    "env.example",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "postinstall": "node scripts/postinstall.js",
+    "preuninstall": "node scripts/preuninstall.js",
+    "test": "bash tests/test_framework.sh run",
+    "docker:build": "docker build -t llm-family-pack:latest .",
+    "docker:run": "docker-compose up -d"
+  },
+  "engines": {
+    "node": ">=14.0.0"
+  },
+  "os": [
+    "darwin",
+    "linux"
+  ],
+  "preferGlobal": true,
+  "publishConfig": {
+    "access": "public"
+  }
+}

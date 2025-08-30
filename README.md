@@ -25,9 +25,53 @@ A **enterprise-grade LiteLLM Proxy + CLI toolkit** with **Advanced Routing & Loa
 
 ## 🚀 Quick Start
 
-### Installation
+### Installation Options
+
+#### 🐳 Docker (Recommended)
 ```bash
-git clone <repository-url> llm-family-pack
+# Pull and run
+docker pull llmfamilypack/llm-family-pack:latest
+docker run -d -p 4000:4000 \
+  -e OPENROUTER_API_KEY=your_key_here \
+  -v ~/.config/litellm:/root/.config/litellm \
+  llmfamilypack/llm-family-pack:latest
+
+# Or use docker-compose
+curl -O https://raw.githubusercontent.com/raufA1/llm-family-pack/main/docker-compose.yml
+docker-compose up -d
+```
+
+#### 📦 Package Managers
+
+**NPM (Node.js)**
+```bash
+npm install -g @llm-family/pack
+```
+
+**Homebrew (macOS/Linux)**
+```bash
+brew tap raufA1/llm-family-pack
+brew install llm-family-pack
+```
+
+**Snap (Universal Linux)**
+```bash
+sudo snap install llm-family-pack
+```
+
+**Debian/Ubuntu**
+```bash
+wget https://github.com/raufA1/llm-family-pack/releases/latest/download/llm-family-pack_4.0.0_all.deb
+sudo dpkg -i llm-family-pack_4.0.0_all.deb
+```
+
+#### 📥 Manual Installation
+```bash
+# Download and install from source
+curl -fsSL https://raw.githubusercontent.com/raufA1/llm-family-pack/main/install.sh | bash
+
+# Or clone and install
+git clone https://github.com/raufA1/llm-family-pack.git
 cd llm-family-pack
 bash install.sh
 ```

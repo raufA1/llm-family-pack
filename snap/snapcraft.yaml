@@ -1,0 +1,98 @@
+name: llm-family-pack
+base: core22
+version: '4.0.0'
+summary: Enterprise-grade LiteLLM Proxy with Advanced Routing & Load Balancing
+description: |
+  LLM Family Pack is a professional-grade CLI toolkit for managing AI models
+  through LiteLLM proxy with advanced routing and load balancing capabilities.
+  
+  Key Features:
+  - Smart routing with 5 load balancing algorithms
+  - Intelligent failover and circuit breakers  
+  - Cost optimization (99%+ savings possible)
+  - Health monitoring and analytics
+  - Professional CLI tools (llm, llm-router, claude+, smart+)
+  
+  Perfect for production AI deployments requiring reliability and cost control.
+
+grade: stable
+confinement: strict
+
+architectures:
+  - build-on: amd64
+  - build-on: arm64
+
+apps:
+  llm:
+    command: bin/llm
+    plugs:
+      - home
+      - network
+      - network-bind
+      - process-control
+      - system-observe
+    
+  llm-router:
+    command: bin/llm-router  
+    plugs:
+      - home
+      - network
+      - network-bind
+      
+  claude-plus:
+    command: bin/claude+
+    plugs:
+      - home
+      - network
+      - network-bind
+      
+  smart-plus:
+    command: bin/smart+
+    plugs:
+      - home
+      - network
+      - network-bind
+      
+  litellm-backup:
+    command: bin/litellm-backup
+    plugs:
+      - home
+
+parts:
+  llm-family-pack:
+    plugin: dump
+    source: .
+    build-packages:
+      - curl
+      - bash
+      - python3
+      - python3-pip
+    stage-packages:
+      - curl
+      - bash
+      - python3
+      - python3-pip
+      - jq
+      - bc
+      - netcat
+    organize:
+      llm: bin/llm
+      claude-plus: bin/claude+
+      smart-plus: bin/smart+
+      llm-router: bin/llm-router
+      backup.sh: bin/litellm-backup
+      lib/*: lib/
+      tests/*: share/tests/
+      config.yaml: etc/config.yaml
+      env.example: etc/env.example
+    override-build: |
+      craftctl default
+      
+      # Install UV package manager
+      curl -fsSL https://astral.sh/uv/install.sh | sh
+      
+      # Make scripts executable
+      chmod +x $CRAFTCTL_PART_INSTALL/bin/*
+      
+      # Create default config directory
+      mkdir -p $CRAFTCTL_PART_INSTALL/etc/llm-family-pack

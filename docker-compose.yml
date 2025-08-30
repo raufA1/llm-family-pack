@@ -1,0 +1,39 @@
+version: '3.8'
+
+services:
+  llm-family-pack:
+    build: .
+    container_name: llm-family-pack
+    ports:
+      - "4000:4000"
+    environment:
+      - LITELLM_DISABLE_DB=true
+      - OPENROUTER_API_KEY=${OPENROUTER_API_KEY:-}
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+    volumes:
+      - ./config:/root/.config/litellm
+      - llm_logs:/var/log/llm-family-pack
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:4000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+  # Optional: Health monitoring dashboard
+  health-monitor:
+    image: prom/prometheus:latest
+    container_name: llm-health-monitor
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml
+    restart: unless-stopped
+    depends_on:
+      - llm-family-pack
+
+volumes:
+  llm_logs:
+    driver: local

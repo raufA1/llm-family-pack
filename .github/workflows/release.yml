@@ -1,0 +1,176 @@
+name: Build and Release Packages
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version to release'
+        required: true
+        default: '4.0.0'
+
+jobs:
+  build-packages:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - name: docker
+            build_cmd: docker
+          - name: debian
+            build_cmd: debian
+          - name: snap
+            build_cmd: snap
+          - name: npm
+            build_cmd: npm
+            
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+
+    - name: Set up Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: '18'
+        registry-url: 'https://registry.npmjs.org'
+
+    - name: Set up Docker Buildx
+      if: matrix.name == 'docker'
+      uses: docker/setup-buildx-action@v3
+
+    - name: Login to Docker Hub
+      if: matrix.name == 'docker'
+      uses: docker/login-action@v3
+      with:
+        username: ${{ secrets.DOCKER_USERNAME }}
+        password: ${{ secrets.DOCKER_PASSWORD }}
+
+    - name: Install build dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y curl bash python3 python3-pip jq bc dpkg-dev
+        
+        # Install snapcraft if building snap
+        if [ "${{ matrix.name }}" = "snap" ]; then
+          sudo snap install snapcraft --classic
+        fi
+
+    - name: Build packages
+      run: |
+        chmod +x scripts/build-all-packages.sh
+        
+        # Extract version from tag or use input
+        if [[ "${GITHUB_REF}" == refs/tags/* ]]; then
+          VERSION=${GITHUB_REF#refs/tags/v}
+        else
+          VERSION=${{ github.event.inputs.version }}
+        fi
+        
+        # Update version in files
+        sed -i "s/4\.0\.0/$VERSION/g" package.json
+        sed -i "s/Version: 4\.0\.0/Version: $VERSION/g" Dockerfile
+        
+        ./scripts/build-all-packages.sh
+
+    - name: Upload build artifacts
+      uses: actions/upload-artifact@v3
+      with:
+        name: packages-${{ matrix.name }}
+        path: dist/
+        retention-days: 30
+
+  create-release:
+    needs: build-packages
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/v')
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Download all artifacts
+      uses: actions/download-artifact@v3
+      with:
+        path: dist/
+
+    - name: Flatten artifacts directory
+      run: |
+        mkdir -p release-assets
+        find dist/ -type f -exec cp {} release-assets/ \;
+        ls -la release-assets/
+
+    - name: Create GitHub Release
+      uses: softprops/action-gh-release@v1
+      with:
+        draft: false
+        prerelease: false
+        files: release-assets/*
+        body_path: dist/packages-docker/RELEASE_NOTES.md
+        name: LLM Family Pack ${{ github.ref_name }}
+        tag_name: ${{ github.ref_name }}
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  publish-npm:
+    needs: build-packages  
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/v')
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Set up Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: '18'
+        registry-url: 'https://registry.npmjs.org'
+
+    - name: Publish to NPM
+      run: |
+        # Extract version from tag
+        VERSION=${GITHUB_REF#refs/tags/v}
+        
+        # Update package.json version
+        sed -i "s/4\.0\.0/$VERSION/g" package.json
+        
+        # Create bin directory
+        mkdir -p bin
+        cp llm claude-plus smart-plus llm-router backup.sh bin/
+        
+        # Publish
+        npm publish --access public
+      env:
+        NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+  publish-docker:
+    needs: build-packages
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/v')
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@v3
+
+    - name: Login to Docker Hub
+      uses: docker/login-action@v3
+      with:
+        username: ${{ secrets.DOCKER_USERNAME }}
+        password: ${{ secrets.DOCKER_PASSWORD }}
+
+    - name: Build and push Docker image
+      uses: docker/build-push-action@v5
+      with:
+        context: .
+        push: true
+        tags: |
+          llmfamilypack/llm-family-pack:latest
+          llmfamilypack/llm-family-pack:${{ github.ref_name }}
+        platforms: linux/amd64,linux/arm64
