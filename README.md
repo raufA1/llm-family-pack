@@ -1,4 +1,4 @@
-# LLM Family Pack v4.0.0
+# LLM Family Pack v4.0.1
 
 A **enterprise-grade LiteLLM Proxy + CLI toolkit** with **Advanced Routing & Load Balancing** for seamless AI model management and developer workflows.
 
@@ -123,8 +123,16 @@ llm test [model]             # Test model connectivity
 # Maintenance
 llm doctor                   # Comprehensive diagnostics
 llm fix                      # Auto-fix common issues
-llm tidy                     # Clean configuration formatting
+llm tidy                     # Clean configuration formatting and remove duplicates
+llm clean-duplicates         # Remove duplicate model configurations  
 llm cache clear              # Clear package cache
+
+# Proxy management
+llm proxy add name url       # Add new web proxy
+llm proxy remove name        # Remove web proxy
+llm proxy list               # List all configured proxies
+llm proxy switch name        # Switch active proxy (use 'none' to disable)
+llm proxy status             # Show current proxy status
 
 # Claude integration
 llm auto-claude [backing]    # Auto-configure Claude aliases
@@ -230,14 +238,27 @@ llm-family-pack/
 └── config.yaml             # Default configuration
 ```
 
-### Key Improvements in v4.0.0
+### Key Improvements in v4.0.1
 
-#### **🚦 Advanced Routing System (NEW!)**
+#### **🔧 Critical Bug Fixes (NEW!)**
+- **Fixed delete command** — Model deletion now works correctly with proper YAML parsing
+- **Resolved duplicate models** — Automatic cleanup of configuration duplicates  
+- **Fixed CLI interface** — Proper input/output redirection for interactive commands
+- **Eliminated readonly errors** — Resolved variable conflicts from multiple library loading
+- **Enhanced error handling** — Better validation and user-friendly error messages
+
+#### **🚦 Advanced Routing System**
 - **Load Balancing Algorithms** — Round robin, weighted, cost-optimized, latency-based
 - **Intelligent Failover** — Automatic backup routing with circuit breakers  
 - **Health Monitoring** — Real-time endpoint health checks with auto-recovery
 - **Route Analytics** — Detailed statistics and cost analysis
 - **Dynamic Configuration** — Hot-reload routing rules without downtime
+
+#### **🌐 Enhanced Proxy Management (NEW!)**
+- **HTTP/HTTPS Proxy Support** — Complete web proxy configuration system
+- **Proxy Switching** — Easy switching between different proxy configurations
+- **Systemd Integration** — Automatic environment variable management  
+- **Proxy Status Monitoring** — Real-time proxy connectivity checks
 
 ### Previous Improvements (v3.0.0)
 
