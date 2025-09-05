@@ -24,7 +24,7 @@
     "url": "https://github.com/raufA1/llm-family-pack/issues"
   },
   "license": "MIT",
-  "author": "LLM Family Pack Team",
+  "author": "raufA1",
   "bin": {
     "llm": "./bin/llm",
     "llm-router": "./bin/llm-router",
