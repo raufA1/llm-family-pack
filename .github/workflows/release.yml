@@ -43,12 +43,12 @@ jobs:
         
     - name: Create Release
       id: create_release
-      uses: actions/create-release@v1
+      uses: softprops/action-gh-release@v1
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       with:
         tag_name: ${{ steps.extract_version.outputs.version }}
-        release_name: LLM Family Pack ${{ steps.extract_version.outputs.version }}
+        name: LLM Family Pack ${{ steps.extract_version.outputs.version }}
         body: ${{ steps.changelog.outputs.changelog }}
         draft: false
         prerelease: false
