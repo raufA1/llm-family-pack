@@ -4,23 +4,25 @@
 
 set -euo pipefail
 
-# Constants
-readonly LFP_VERSION="3.0.0"
-readonly CFG_DIR="${HOME}/.config/litellm"
-readonly CFG_FILE="${CFG_DIR}/config.yaml"
-readonly ENV_FILE="${CFG_DIR}/env"
-readonly DEFAULT_MODEL_FILE="${CFG_DIR}/default_model"
-readonly UNIT_NAME="litellm.service"
-readonly DEFAULT_PORT=4000
-readonly BASE_URL="http://127.0.0.1:${DEFAULT_PORT}"
-readonly LOG_FILE="${CFG_DIR}/llm-family-pack.log"
+# Constants - only declare if not already set
+if [[ -z "${LFP_VERSION:-}" ]]; then
+    readonly LFP_VERSION="4.0.0"
+    readonly CFG_DIR="${HOME}/.config/litellm"
+    readonly CFG_FILE="${CFG_DIR}/config.yaml"
+    readonly ENV_FILE="${CFG_DIR}/env"
+    readonly DEFAULT_MODEL_FILE="${CFG_DIR}/default_model"
+    readonly UNIT_NAME="litellm.service"
+    readonly DEFAULT_PORT=4000
+    readonly BASE_URL="http://127.0.0.1:${DEFAULT_PORT}"
+    readonly LOG_FILE="${CFG_DIR}/llm-family-pack.log"
 
-# Colors for output
-readonly RED='\033[0;31m'
-readonly GREEN='\033[0;32m'
-readonly YELLOW='\033[1;33m'
-readonly BLUE='\033[0;34m'
-readonly NC='\033[0m' # No Color
+    # Colors for output
+    readonly RED='\033[0;31m'
+    readonly GREEN='\033[0;32m'
+    readonly YELLOW='\033[1;33m'
+    readonly BLUE='\033[0;34m'
+    readonly NC='\033[0m' # No Color
+fi
 
 # Logging functions
 log_info() {

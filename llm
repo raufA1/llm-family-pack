@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # LLM Family Pack - Main CLI Tool
-# Version: 3.0.0
+# Version: 3.1.0
 
 set -euo pipefail
 
@@ -40,6 +40,12 @@ source "${LIB_DIR}/service_manager.sh" || {
     exit 1
 }
 
+# shellcheck source=lib/proxy_manager.sh
+source "${LIB_DIR}/proxy_manager.sh" || {
+    echo "Error: Cannot load proxy manager from ${LIB_DIR}/proxy_manager.sh" >&2
+    exit 1
+}
+
 # Initialize
 init_common
 
@@ -68,6 +74,13 @@ MODEL COMMANDS:
     delete                   Interactively delete a model
     test [alias] [endpoint]  Test model connectivity
 
+PROXY COMMANDS:
+    proxy add <name> <url>   Add a new web proxy
+    proxy remove <name>      Remove a web proxy
+    proxy list               List all configured proxies
+    proxy switch <name>      Switch the active proxy (use 'none' to disable)
+    proxy status             Show the current active proxy
+
 CLAUDE INTEGRATION:
     ensure-claude [backing]  Ensure Claude aliases point to backing model
     auto-claude [backing]    Auto-configure Claude aliases from environment
@@ -76,6 +89,7 @@ MAINTENANCE COMMANDS:
     doctor                   Run comprehensive diagnostics
     fix                      Fix common configuration issues
     tidy                     Clean up configuration file formatting
+    clean-duplicates         Remove duplicate model configurations
     show-config             Display current configuration
     cache clear             Clear uv package cache
 
@@ -86,10 +100,9 @@ OPTIONS:
 
 EXAMPLES:
     llm start && llm doctor
-    llm add "gpt-4" "gpt-4" "https://api.openai.com/v1" 8192
-    llm list
-    llm change
-    llm auto-claude "qwen coder"
+    llm proxy add myproxy http://user:pass@host:port
+    llm proxy switch myproxy
+    llm restart
 
 For more information, visit: https://github.com/your-username/llm-family-pack
 
@@ -195,9 +208,9 @@ add_model_interactive() {
 select_model_interactive() {
     local action="$1"
     
-    echo "Available models:"
+    echo "Available models:" >&2
     local -a models
-    mapfile -t models < <(get_aliases_from_config)
+    mapfile -t models < <(get_aliases_from_config | sort -u)  # Remove duplicates
     
     if [[ ${#models[@]} -eq 0 ]]; then
         die "No models configured. Use 'llm add' to add a model first."
@@ -206,16 +219,17 @@ select_model_interactive() {
     local i=0
     for model in "${models[@]}"; do
         i=$((i + 1))
-        echo "  ${i}) ${model}"
+        echo "  ${i}) ${model}" >&2
     done
     
+    echo >&2
     local selection
-    read -r -p "Select model [1-${#models[@]}]: " selection
+    read -r -p "Select model [1-${#models[@]}]: " selection >&2
     
     if [[ "${selection}" =~ ^[0-9]+$ ]] && [[ "${selection}" -ge 1 ]] && [[ "${selection}" -le ${#models[@]} ]]; then
         echo "${models[$((selection - 1))]}"
     else
-        die "Invalid selection"
+        die "Invalid selection: ${selection}"
     fi
 }
 
@@ -325,11 +339,40 @@ main() {
             selected_model="$(select_model_interactive "delete")"
             delete_alias "${selected_model}" || handle_command_error $? "${cmd}"
             ;;
+        proxy)
+            local sub_cmd="${1:-status}"
+            shift || true
+            case "${sub_cmd}" in
+                add)
+                    add_proxy "$@" || handle_command_error $? "${cmd} ${sub_cmd}"
+                    ;;
+                remove)
+                    remove_proxy "$@" || handle_command_error $? "${cmd} ${sub_cmd}"
+                    ;;
+                list)
+                    list_proxies || handle_command_error $? "${cmd} ${sub_cmd}"
+                    ;;
+                switch)
+                    switch_proxy "$@" || handle_command_error $? "${cmd} ${sub_cmd}"
+                    ;;
+                status)
+                    show_proxy_status || handle_command_error $? "${cmd} ${sub_cmd}"
+                    ;;
+                *)
+                    log_error "Unknown proxy command: ${sub_cmd}"
+                    usage
+                    exit 1
+                    ;;
+            esac
+            ;;
         test)
             test_model "$@" || handle_command_error $? "${cmd}"
             ;;
         tidy)
             tidy_config || handle_command_error $? "${cmd}"
+            ;;
+        clean-duplicates)
+            remove_duplicate_models || handle_command_error $? "${cmd}"
             ;;
         show-config)
             if [[ -f "${CFG_FILE}" ]]; then

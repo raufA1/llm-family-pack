@@ -13,6 +13,9 @@ source "${SCRIPT_DIR}/common.sh"
 start_service() {
     log_info "Starting LiteLLM proxy service..."
     
+    # Ensure proxy settings are applied before starting
+    update_systemd_proxy
+    
     if check_service_status; then
         log_warn "Service is already running"
         return 0
