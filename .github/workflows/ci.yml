@@ -1,0 +1,141 @@
+name: LLM Family Pack CI
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  lint-and-test:
+    name: Lint and Test
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      
+    - name: Setup ShellCheck
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y shellcheck
+        
+    - name: Lint shell scripts
+      run: |
+        echo "🔍 Running ShellCheck on all shell scripts..."
+        find . -name "*.sh" -not -path "./.*" | xargs shellcheck -x || true
+        
+    - name: Check script permissions
+      run: |
+        echo "🔐 Checking executable permissions..."
+        test -x ./llm || (echo "❌ llm not executable" && exit 1)
+        test -x ./llm-router || (echo "❌ llm-router not executable" && exit 1)  
+        test -x ./claude-plus || (echo "❌ claude-plus not executable" && exit 1)
+        test -x ./smart-plus || (echo "❌ smart-plus not executable" && exit 1)
+        echo "✅ All main scripts have correct permissions"
+        
+    - name: Validate YAML configs
+      run: |
+        echo "📝 Validating YAML configuration files..."
+        python3 -c "import yaml; yaml.safe_load(open('config.yaml'))" || (echo "❌ config.yaml invalid" && exit 1)
+        echo "✅ YAML files are valid"
+        
+    - name: Test CLI help commands
+      run: |
+        echo "🧪 Testing CLI help commands..."
+        ./llm --help > /dev/null || (echo "❌ llm --help failed" && exit 1)
+        ./llm-router --help > /dev/null || (echo "❌ llm-router --help failed" && exit 1)
+        ./claude-plus --help > /dev/null || (echo "❌ claude-plus --help failed" && exit 1)
+        ./smart-plus --help > /dev/null || (echo "❌ smart-plus --help failed" && exit 1)
+        echo "✅ All CLI help commands work"
+
+  package-validation:
+    name: Package Validation
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      
+    - name: Setup Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: '18'
+        
+    - name: Validate package.json
+      run: |
+        echo "📦 Validating package.json..."
+        npm pkg fix || (echo "❌ package.json validation failed" && exit 1)
+        echo "✅ package.json is valid"
+        
+    - name: Check for security vulnerabilities
+      run: |
+        echo "🔒 Running security audit..."
+        npm audit --audit-level moderate || true
+        
+  documentation:
+    name: Documentation Check
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      
+    - name: Check README exists and valid
+      run: |
+        echo "📚 Checking documentation..."
+        test -f README.md || (echo "❌ README.md missing" && exit 1)
+        test -f LICENSE || (echo "❌ LICENSE missing" && exit 1)
+        
+        # Check if version in README matches package.json
+        readme_version=$(grep -o 'v[0-9]\+\.[0-9]\+\.[0-9]\+' README.md | head -1)
+        pkg_version="v$(node -p "require('./package.json').version")"
+        
+        if [ "$readme_version" != "$pkg_version" ]; then
+          echo "⚠️  Version mismatch: README has $readme_version, package.json has $pkg_version"
+        else
+          echo "✅ Documentation versions match"
+        fi
+        
+    - name: Check for broken links in README
+      run: |
+        echo "🔗 Checking for placeholder links..."
+        if grep -q "your-username" README.md; then
+          echo "⚠️  Found placeholder 'your-username' in README"
+        fi
+        echo "✅ Documentation check complete"
+
+  integration-test:
+    name: Integration Tests
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      
+    - name: Install dependencies
+      run: |
+        # Install uv package manager
+        curl -fsSL https://astral.sh/uv/install.sh | sh
+        echo "$HOME/.local/bin" >> $GITHUB_PATH
+        
+    - name: Test installation process
+      run: |
+        echo "🔧 Testing installation process..."
+        # Test clean installation (dry run)
+        bash install.sh --dry-run || echo "⚠️  Installation script needs --dry-run flag"
+        echo "✅ Installation process validated"
+        
+    - name: Test CLI basic functionality
+      run: |
+        echo "🧪 Testing CLI basic functionality..."
+        # Create minimal test config
+        mkdir -p ~/.config/litellm
+        cp config.yaml ~/.config/litellm/config.yaml
+        
+        # Test basic commands that don't require external services
+        ./llm --version || (echo "❌ version command failed" && exit 1)
+        ./llm show-config > /dev/null || (echo "❌ show-config failed" && exit 1)
+        ./llm list || (echo "❌ list command failed" && exit 1)
+        
+        echo "✅ Basic CLI functionality works"

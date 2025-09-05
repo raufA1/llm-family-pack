@@ -1,5 +1,11 @@
 # LLM Family Pack v4.0.1
 
+[![CI Status](https://github.com/raufA1/llm-family-pack/workflows/LLM%20Family%20Pack%20CI/badge.svg)](https://github.com/raufA1/llm-family-pack/actions)
+[![Release](https://img.shields.io/github/v/release/raufA1/llm-family-pack)](https://github.com/raufA1/llm-family-pack/releases/latest)
+[![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![NPM Package](https://img.shields.io/npm/v/@llm-family/pack)](https://www.npmjs.com/package/@llm-family/pack)
+[![Docker](https://img.shields.io/badge/docker-available-blue)](https://hub.docker.com/r/llmfamilypack/llm-family-pack)
+
 A **enterprise-grade LiteLLM Proxy + CLI toolkit** with **Advanced Routing & Load Balancing** for seamless AI model management and developer workflows.
 
 ## ✨ Features
